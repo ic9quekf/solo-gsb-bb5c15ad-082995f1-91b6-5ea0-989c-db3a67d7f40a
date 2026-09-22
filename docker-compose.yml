@@ -1,0 +1,16 @@
+services:
+  continuity:
+    build: .
+    container_name: continuity-checker
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      DATABASE_PATH: /app/data/continuity.db
+      SEED_DEMO: "1" # 置 "0" 可关闭首次启动的演示数据
+    volumes:
+      - continuity-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  continuity-data:

@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/ConflictsPanel.tsx","./src/components/EntitiesPanel.tsx","./src/components/ScenesPanel.tsx","./src/components/SchedulePanel.tsx","./src/components/ShotListPanel.tsx","./src/components/TimelinePanel.tsx"],"version":"5.9.3"}

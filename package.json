@@ -1,0 +1,15 @@
+{
+  "name": "continuity-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "短片场记 · 非线性拍摄连续性校验（React + Express + SQLite）",
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install",
+    "dev": "concurrently -n server,client -c blue,green \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "build": "npm --prefix client run build && npm --prefix server run build",
+    "start": "node server/dist/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
