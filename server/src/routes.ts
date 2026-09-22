@@ -1,7 +1,17 @@
 import { Router, type Request, type Response } from 'express';
 import { db, isValidDateISO } from './db.js';
 import { computeContinuity } from './engine.js';
-import { computeSchedule, computeStoryOrder, getScheduleSettings } from './schedule.js';
+import {
+  computeSchedule,
+  computeStoryOrder,
+  getScheduleSettings,
+} from './schedule.js';
+import {
+  getAuditVersion,
+  listAuditVersions,
+  recordScheduleVersion,
+  setAuditBaseline,
+} from './audit.js';
 import { PrereqValidationError, assertPrereqsValid, computeShotList } from './shots.js';
 
 export const api = Router();
@@ -512,6 +522,11 @@ api.put(
       db.prepare('DELETE FROM schedule_dates').run();
       const ins = db.prepare('INSERT INTO schedule_dates (date, sort_order) VALUES (?, ?)');
       dates.forEach((d, i) => ins.run(d, i + 1));
+      // 保存设置并重算后记录审计版本（同事务；结果无变化时不产生空版本）
+      recordScheduleVersion({
+        kind: 'settings',
+        note: `保存排程设置：${dates.length} 个拍摄日，单日预计 ${dayMinutes} 分钟`,
+      });
     })();
 
     res.json(getScheduleSettings());
@@ -529,7 +544,9 @@ api.put(
     if (ordinal < 1) throw new HttpError(400, '拍摄位置必须 >= 1');
     if (ordinal > 1000) throw new HttpError(400, '拍摄位置过大');
 
-    const exists = db.prepare('SELECT id FROM scenes WHERE id = ?').get(sceneId);
+    const exists = db.prepare('SELECT id, title FROM scenes WHERE id = ?').get(sceneId) as
+      | { id: number; title: string }
+      | undefined;
     if (!exists) throw new HttpError(404, '场景不存在');
     const settings = getScheduleSettings();
     if (!settings.dates.includes(date)) {
@@ -542,12 +559,21 @@ api.put(
       throw new HttpError(409, `${date} 第 ${ordinal} 位已被另一场次锁定，请先解锁该位置或换一个位置`);
     }
 
-    db.prepare(
-      `INSERT INTO schedule_locks (scene_id, date, ordinal) VALUES (?, ?, ?)
-       ON CONFLICT(scene_id) DO UPDATE SET date = excluded.date, ordinal = excluded.ordinal, locked_at = datetime('now')`
-    ).run(sceneId, date, ordinal);
+    // 锁定写入 + 重算 + 审计版本在同一事务：任一失败整体回滚
+    const report = db.transaction(() => {
+      db.prepare(
+        `INSERT INTO schedule_locks (scene_id, date, ordinal) VALUES (?, ?, ?)
+         ON CONFLICT(scene_id) DO UPDATE SET date = excluded.date, ordinal = excluded.ordinal, locked_at = datetime('now')`
+      ).run(sceneId, date, ordinal);
+      const r = computeSchedule();
+      recordScheduleVersion(
+        { kind: 'lock', note: `锁定「${exists.title}」到 ${date} 第 ${ordinal} 位` },
+        r
+      );
+      return r;
+    })();
 
-    res.json(computeSchedule());
+    res.json(report);
   })
 );
 
@@ -556,8 +582,64 @@ api.delete(
   '/schedule/:id/lock',
   h((req, res) => {
     const sceneId = idParam(req);
-    db.prepare('DELETE FROM schedule_locks WHERE scene_id = ?').run(sceneId);
-    res.json(computeSchedule());
+    const scene = db.prepare('SELECT title FROM scenes WHERE id = ?').get(sceneId) as
+      | { title: string }
+      | undefined;
+    const report = db.transaction(() => {
+      db.prepare('DELETE FROM schedule_locks WHERE scene_id = ?').run(sceneId);
+      const r = computeSchedule();
+      recordScheduleVersion(
+        { kind: 'unlock', note: `解锁「${scene?.title ?? `场景 #${sceneId}`}」` },
+        r
+      );
+      return r;
+    })();
+    res.json(report);
+  })
+);
+
+/* ------------------------------ 排程变更审计 ----------------------------- */
+
+/**
+ * 排程变更审计：每次保存拍摄日期/单日容量或锁定/解锁场次并重算后，
+ * 服务端将本次排程结果与对比基准（当前基线，否则上一版）按场景逐项比对并落库；
+ * 结果无变化的重复保存不会产生空版本。可将任一版本标记为基线后继续比较。
+ */
+
+/** 版本列表（新→旧）与当前基线 */
+api.get(
+  '/schedule/audit',
+  h((_req, res) => {
+    res.json(listAuditVersions());
+  })
+);
+
+/** 单个版本详情：变更摘要、逐场景变更（含原因）与本版排程快照 */
+api.get(
+  '/schedule/audit/:id',
+  h((req, res) => {
+    const id = idParam(req);
+    const detail = getAuditVersion(id);
+    if (!detail) throw new HttpError(404, '审计版本不存在');
+    res.json(detail);
+  })
+);
+
+/** 设置/清除基线（{versionId}；null 或 0 = 清除，恢复与上一版比较） */
+api.put(
+  '/schedule/audit/baseline',
+  h((req, res) => {
+    const raw = req.body?.versionId;
+    const n = raw === null || raw === undefined ? 0 : num(raw, 0);
+    const versionId = n > 0 ? n : null;
+    if (versionId !== null) {
+      const exists = db
+        .prepare('SELECT id FROM schedule_audit_versions WHERE id = ?')
+        .get(versionId);
+      if (!exists) throw new HttpError(404, '要设为基线的版本不存在');
+    }
+    setAuditBaseline(versionId);
+    res.json(listAuditVersions());
   })
 );
 

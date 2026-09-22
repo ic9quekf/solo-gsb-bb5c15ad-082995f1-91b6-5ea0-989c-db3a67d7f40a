@@ -3,13 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrate, seedIfEmpty } from './db.js';
+import { recordScheduleVersion } from './audit.js';
 import { api } from './routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 migrate();
-if (process.env.SEED_DEMO !== '0') {
-  seedIfEmpty();
+if (process.env.SEED_DEMO !== '0' && seedIfEmpty()) {
+  // 演示数据落库后记录首个排程审计版本，作为后续保存的比较起点
+  recordScheduleVersion({ kind: 'init', note: '演示数据初始版本（后续保存将与此版比较）' });
 }
 
 const app = express();

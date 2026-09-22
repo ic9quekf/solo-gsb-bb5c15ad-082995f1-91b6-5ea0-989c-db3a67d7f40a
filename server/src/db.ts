@@ -141,6 +141,45 @@ export function migrate(): void {
       CHECK (shot_id <> prereq_shot_id)
     );
 
+    -- 排程变更审计：版本。每次保存拍摄日期/单日容量或锁定/解锁场次并重算后，
+    -- 将本次排程结果与对比基准（上一版或当前基线）按场景逐项比对并落库。
+    CREATE TABLE IF NOT EXISTS schedule_audit_versions (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      version_no       INTEGER NOT NULL UNIQUE,        -- 从 1 递增的版本号
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      trigger_kind     TEXT NOT NULL,                  -- 'init' | 'settings' | 'lock' | 'unlock'
+      trigger_note     TEXT NOT NULL DEFAULT '',       -- 触发动作的人类可读说明
+      base_version_id  INTEGER REFERENCES schedule_audit_versions(id),  -- 对比基准版本（上一版或基线）
+      base_is_baseline INTEGER NOT NULL DEFAULT 0,     -- 对比基准在比对时是否为基线
+      fingerprint      TEXT NOT NULL,                  -- 排程结果指纹：相同结果重复保存不产生空版本
+      scene_count      INTEGER NOT NULL DEFAULT 0,
+      change_count     INTEGER NOT NULL DEFAULT 0,
+      summary_json     TEXT NOT NULL DEFAULT '{}',     -- 按变更类型 / 原因的统计
+      snapshot_json    TEXT NOT NULL DEFAULT '{}'      -- 本版排程快照（设置 + 各场景落位）
+    );
+
+    -- 排程变更审计：逐场景变更条目
+    CREATE TABLE IF NOT EXISTS schedule_audit_changes (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      version_id   INTEGER NOT NULL REFERENCES schedule_audit_versions(id) ON DELETE CASCADE,
+      scene_id     INTEGER,                          -- 被移除的场景可能已删除，故不做外键约束
+      scene_title  TEXT NOT NULL DEFAULT '',
+      story_index  INTEGER NOT NULL DEFAULT 0,
+      change_type  TEXT NOT NULL,                    -- added/removed/date-moved/order-moved/lock-changed/adjusted
+      from_date    TEXT NOT NULL DEFAULT '',
+      to_date      TEXT NOT NULL DEFAULT '',
+      from_ordinal INTEGER NOT NULL DEFAULT 0,
+      to_ordinal   INTEGER NOT NULL DEFAULT 0,
+      reasons_json TEXT NOT NULL DEFAULT '[]',       -- lock/capacity/story-order/location/scene/other
+      detail       TEXT NOT NULL DEFAULT ''          -- 含原因说明的人类可读描述
+    );
+
+    -- 排程变更审计：单行元数据（当前基线；id 恒为 1）
+    CREATE TABLE IF NOT EXISTS schedule_audit_meta (
+      id                  INTEGER PRIMARY KEY CHECK (id = 1),
+      baseline_version_id INTEGER REFERENCES schedule_audit_versions(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_scenes_order   ON scenes (story_time, seq, id);
     CREATE INDEX IF NOT EXISTS idx_snapshots_scene ON snapshots (scene_id);
     CREATE INDEX IF NOT EXISTS idx_changes_scene  ON changes (scene_id);
@@ -149,6 +188,7 @@ export function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_shots_scene    ON shots (scene_id, sort_order, id);
     CREATE INDEX IF NOT EXISTS idx_takes_shot     ON takes (shot_id, take_no);
     CREATE INDEX IF NOT EXISTS idx_prereqs_prereq ON shot_prereqs (prereq_shot_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_changes_version ON schedule_audit_changes (version_id);
   `);
 
   // 旧库升级：为 scenes 增补排程字段（全新库由建表直接包含）
@@ -174,12 +214,19 @@ export function migrate(): void {
     const insDate = db.prepare('INSERT INTO schedule_dates (date, sort_order) VALUES (?, ?)');
     def.shootDates.forEach((date, i) => insDate.run(date, i + 1));
   }
+
+  // 排程变更审计的元数据行（基线初始为空）
+  const auditMeta = db.prepare('SELECT id FROM schedule_audit_meta WHERE id = 1').get();
+  if (!auditMeta) {
+    db.prepare('INSERT INTO schedule_audit_meta (id, baseline_version_id) VALUES (1, NULL)').run();
+  }
 }
 
-/** 首次启动时写入一份演示数据（含两处刻意制造的连续性冲突），便于打开即见效果。 */
-export function seedIfEmpty(): void {
+/** 首次启动时写入一份演示数据（含两处刻意制造的连续性冲突），便于打开即见效果。
+ *  返回是否真正写入了演示数据（库非空时为 false）。 */
+export function seedIfEmpty(): boolean {
   const row = db.prepare('SELECT COUNT(*) AS n FROM entities').get() as { n: number };
-  if (row.n > 0) return;
+  if (row.n > 0) return false;
 
   const seed = db.transaction(() => {
     const insEntity = db.prepare(
@@ -317,4 +364,5 @@ export function seedIfEmpty(): void {
 
   seed();
   console.log('[db] 已写入演示数据（设置 SEED_DEMO=0 可关闭）');
+  return true;
 }

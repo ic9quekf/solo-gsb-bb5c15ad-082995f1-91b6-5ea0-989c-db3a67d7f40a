@@ -13,13 +13,15 @@ import { TimelinePanel } from './components/TimelinePanel';
 import { ConflictsPanel } from './components/ConflictsPanel';
 import { SchedulePanel } from './components/SchedulePanel';
 import { ShotListPanel } from './components/ShotListPanel';
+import { AuditPanel } from './components/AuditPanel';
 
-type Tab = 'timeline' | 'conflicts' | 'schedule' | 'scenes' | 'shots' | 'entities';
+type Tab = 'timeline' | 'conflicts' | 'schedule' | 'audit' | 'scenes' | 'shots' | 'entities';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'timeline', label: '故事时间线' },
   { key: 'conflicts', label: '冲突列表' },
   { key: 'schedule', label: '现场拍摄排程' },
+  { key: 'audit', label: '排程变更审计' },
   { key: 'scenes', label: '场景管理' },
   { key: 'shots', label: '镜头清单' },
   { key: 'entities', label: '对象与字段' },
@@ -35,6 +37,8 @@ export default function App() {
   const [filterEntity, setFilterEntity] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  // 每次整体刷新时递增，驱动审计页重新拉取版本列表
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // 任何新增/修改/删除后调用：服务端现算，前端整体刷新 => 自动重算
   const reload = useCallback(async () => {
@@ -51,6 +55,7 @@ export default function App() {
       setReport(r);
       setSchedule(sch);
       setShotList(sl);
+      setRefreshKey((k) => k + 1);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -87,9 +92,9 @@ export default function App() {
         <div className="brand">
           <span className="logo">🎬</span>
           <div>
-            <h1>短片场记 · 连续性校验 + 现场拍摄排程 + 镜头清单</h1>
+            <h1>短片场记 · 连续性校验 + 现场拍摄排程 + 镜头清单 + 排程审计</h1>
             <p className="muted">
-              非线性拍摄 · 按故事时间重放状态变更 · 按拍摄日确定性排程（故事顺序约束 / 锁定 / 同地点合并）· 按镜头状态与最佳条计算完成度
+              非线性拍摄 · 按故事时间重放状态变更 · 按拍摄日确定性排程（故事顺序约束 / 锁定 / 同地点合并）· 按镜头状态与最佳条计算完成度 · 排程版本逐项比对与基线审计
             </p>
           </div>
         </div>
@@ -168,6 +173,8 @@ export default function App() {
           <ConflictsPanel report={report} filterEntity={filterEntity} />
         ) : tab === 'schedule' ? (
           <SchedulePanel schedule={schedule} run={run} onSchedule={setSchedule} />
+        ) : tab === 'audit' ? (
+          <AuditPanel refreshKey={refreshKey} />
         ) : tab === 'scenes' ? (
           <ScenesPanel scenes={scenes} entities={entities} run={run} />
         ) : tab === 'shots' ? (

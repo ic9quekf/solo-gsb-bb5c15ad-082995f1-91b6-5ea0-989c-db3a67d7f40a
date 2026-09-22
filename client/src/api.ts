@@ -176,6 +176,88 @@ export interface ScheduleSettings {
   dates: string[];
 }
 
+/* ------------------------------ 排程变更审计 ------------------------------ */
+
+export type AuditChangeType =
+  | 'added'
+  | 'removed'
+  | 'date-moved'
+  | 'order-moved'
+  | 'lock-changed'
+  | 'adjusted';
+
+export type AuditReason =
+  | 'lock'
+  | 'capacity'
+  | 'story-order'
+  | 'location'
+  | 'scene'
+  | 'other';
+
+export interface AuditSummary {
+  byType: Record<AuditChangeType, number>;
+  byReason: Record<AuditReason, number>;
+}
+
+export interface AuditVersion {
+  id: number;
+  versionNo: number;
+  createdAt: string;
+  triggerKind: 'init' | 'settings' | 'lock' | 'unlock';
+  triggerNote: string;
+  baseVersionId: number | null;
+  baseVersionNo: number | null;
+  baseIsBaseline: boolean;
+  sceneCount: number;
+  changeCount: number;
+  summary: AuditSummary;
+  isBaseline: boolean;
+}
+
+export interface AuditChange {
+  id: number;
+  sceneId: number | null;
+  sceneTitle: string;
+  storyIndex: number;
+  changeType: AuditChangeType;
+  fromDate: string;
+  toDate: string;
+  fromOrdinal: number;
+  toOrdinal: number;
+  reasons: AuditReason[];
+  detail: string;
+}
+
+export interface AuditSceneSnap {
+  sceneId: number;
+  title: string;
+  storyIndex: number;
+  date: string;
+  dayIndex: number;
+  ordinal: number;
+  locked: boolean;
+  location: string;
+  estMinutes: number;
+  minStoryIndex: number;
+  startMinute: number;
+  endMinute: number;
+  overflow: boolean;
+  orderViolation: boolean;
+}
+
+export interface AuditVersionDetail extends AuditVersion {
+  changes: AuditChange[];
+  snapshot: {
+    settings: ScheduleSettings;
+    scenes: AuditSceneSnap[];
+  };
+}
+
+export interface AuditListResponse {
+  baselineVersionId: number | null;
+  versions: AuditVersion[];
+}
+
 /* ------------------------------- 镜头清单 ------------------------------- */
 
 export type ShotStatus = 'pending' | 'done' | 'reshoot';
@@ -348,6 +430,14 @@ export const api = {
     }),
   unlockScene: (id: number) =>
     req<ScheduleReport>(`/api/schedule/${id}/lock`, { method: 'DELETE' }),
+
+  scheduleAudit: () => req<AuditListResponse>('/api/schedule/audit'),
+  scheduleAuditVersion: (id: number) => req<AuditVersionDetail>(`/api/schedule/audit/${id}`),
+  setAuditBaseline: (versionId: number | null) =>
+    req<AuditListResponse>('/api/schedule/audit/baseline', {
+      method: 'PUT',
+      body: JSON.stringify({ versionId }),
+    }),
 
   shotList: (sceneId?: number) =>
     req<ShotListReport>(`/api/shots${sceneId ? `?sceneId=${sceneId}` : ''}`),
