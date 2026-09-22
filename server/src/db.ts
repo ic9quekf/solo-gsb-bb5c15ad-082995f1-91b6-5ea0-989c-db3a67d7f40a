@@ -141,6 +141,63 @@ export function migrate(): void {
       CHECK (shot_id <> prereq_shot_id)
     );
 
+    -- ===================== 排程变更审计 =====================
+    -- 每次保存拍摄日期 / 单日容量 / 场次锁定并重算后，与基线（未标记时为上一版）
+    -- 逐项比对生成一个审计版本；结果完全相同的重复保存不会产生空版本。
+    CREATE TABLE IF NOT EXISTS schedule_audit_versions (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      trigger         TEXT NOT NULL,             -- 'init' | 'settings' | 'lock' | 'unlock' | 'manual' | 'compare'
+      note            TEXT NOT NULL DEFAULT '',  -- 本次保存的人类可读说明
+      base_version_id INTEGER REFERENCES schedule_audit_versions(id), -- 比对的基准版本（基线或上一版）
+      is_baseline     INTEGER NOT NULL DEFAULT 0,
+      day_minutes     INTEGER NOT NULL DEFAULT 480,
+      input_hash      TEXT NOT NULL DEFAULT '',  -- 本次排程输入（设置+锁定+场景排程字段）指纹，用于去重
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- 版本对应的拍摄日期列表（有序）
+    CREATE TABLE IF NOT EXISTS schedule_audit_dates (
+      version_id INTEGER NOT NULL REFERENCES schedule_audit_versions(id) ON DELETE CASCADE,
+      date       TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      PRIMARY KEY (version_id, sort_order)
+    );
+
+    -- 版本快照：每个场景在该版排程中的位置与状态（含未能排入任何拍摄日的场次）
+    CREATE TABLE IF NOT EXISTS schedule_audit_items (
+      version_id       INTEGER NOT NULL REFERENCES schedule_audit_versions(id) ON DELETE CASCADE,
+      scene_id         INTEGER NOT NULL,
+      scene_title      TEXT NOT NULL,
+      story_index      INTEGER NOT NULL,
+      day_index        INTEGER NOT NULL,         -- -1 = 未排入任何拍摄日
+      date             TEXT NOT NULL DEFAULT '',
+      ordinal          INTEGER NOT NULL DEFAULT 0,
+      locked           INTEGER NOT NULL DEFAULT 0,
+      est_minutes      INTEGER NOT NULL DEFAULT 0,
+      min_story_index  INTEGER NOT NULL DEFAULT 0,
+      overflow         INTEGER NOT NULL DEFAULT 0,
+      order_violation  INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (version_id, scene_id)
+    );
+
+    -- 版本内逐项变更（新增 / 移除 / 日期移动 / 顺序移动 / 锁定变化）及原因
+    CREATE TABLE IF NOT EXISTS schedule_audit_changes (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      version_id   INTEGER NOT NULL REFERENCES schedule_audit_versions(id) ON DELETE CASCADE,
+      scene_id     INTEGER NOT NULL,
+      scene_title  TEXT NOT NULL,
+      story_index  INTEGER NOT NULL DEFAULT 0,
+      change_type  TEXT NOT NULL,                -- 'added' | 'removed' | 'date-moved' | 'order-moved' | 'lock-changed'
+      reasons      TEXT NOT NULL DEFAULT '[]',   -- [{code, message}]：lock/capacity/story-prereq/new-scene/removed-scene/other
+      from_date    TEXT NOT NULL DEFAULT '',
+      to_date      TEXT NOT NULL DEFAULT '',
+      from_ordinal INTEGER,
+      to_ordinal   INTEGER,
+      from_locked  INTEGER NOT NULL DEFAULT 0,
+      to_locked    INTEGER NOT NULL DEFAULT 0,
+      sort_order   INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE INDEX IF NOT EXISTS idx_scenes_order   ON scenes (story_time, seq, id);
     CREATE INDEX IF NOT EXISTS idx_snapshots_scene ON snapshots (scene_id);
     CREATE INDEX IF NOT EXISTS idx_changes_scene  ON changes (scene_id);
@@ -149,6 +206,9 @@ export function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_shots_scene    ON shots (scene_id, sort_order, id);
     CREATE INDEX IF NOT EXISTS idx_takes_shot     ON takes (shot_id, take_no);
     CREATE INDEX IF NOT EXISTS idx_prereqs_prereq ON shot_prereqs (prereq_shot_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_versions ON schedule_audit_versions (created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_audit_items_ver ON schedule_audit_items (version_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_changes_ver ON schedule_audit_changes (version_id, sort_order, id);
   `);
 
   // 旧库升级：为 scenes 增补排程字段（全新库由建表直接包含）

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrate, seedIfEmpty } from './db.js';
+import { ensureInitialVersion } from './audit.js';
 import { api } from './routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,8 @@ migrate();
 if (process.env.SEED_DEMO !== '0') {
   seedIfEmpty();
 }
+// 建立排程审计的第 1 版（初始基线快照，幂等；已有版本时跳过）
+ensureInitialVersion();
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));

@@ -13,13 +13,15 @@ import { TimelinePanel } from './components/TimelinePanel';
 import { ConflictsPanel } from './components/ConflictsPanel';
 import { SchedulePanel } from './components/SchedulePanel';
 import { ShotListPanel } from './components/ShotListPanel';
+import { AuditPanel } from './components/AuditPanel';
 
-type Tab = 'timeline' | 'conflicts' | 'schedule' | 'scenes' | 'shots' | 'entities';
+type Tab = 'timeline' | 'conflicts' | 'schedule' | 'audit' | 'scenes' | 'shots' | 'entities';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'timeline', label: '故事时间线' },
   { key: 'conflicts', label: '冲突列表' },
   { key: 'schedule', label: '现场拍摄排程' },
+  { key: 'audit', label: '排程审计' },
   { key: 'scenes', label: '场景管理' },
   { key: 'shots', label: '镜头清单' },
   { key: 'entities', label: '对象与字段' },
@@ -168,6 +170,8 @@ export default function App() {
           <ConflictsPanel report={report} filterEntity={filterEntity} />
         ) : tab === 'schedule' ? (
           <SchedulePanel schedule={schedule} run={run} onSchedule={setSchedule} />
+        ) : tab === 'audit' ? (
+          <AuditPanel run={run} />
         ) : tab === 'scenes' ? (
           <ScenesPanel scenes={scenes} entities={entities} run={run} />
         ) : tab === 'shots' ? (

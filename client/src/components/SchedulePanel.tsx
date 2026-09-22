@@ -27,6 +27,7 @@ export function SchedulePanel({ schedule, run, onSchedule }: Props) {
   const [dates, setDates] = useState<string[]>([]);
   const [newDate, setNewDate] = useState('');
   const [savedAt, setSavedAt] = useState('');
+  const [auditNote, setAuditNote] = useState('');
 
   useEffect(() => {
     if (schedule) {
@@ -40,11 +41,17 @@ export function SchedulePanel({ schedule, run, onSchedule }: Props) {
   const saveSettings = () =>
     run(async () => {
       const r = await api.updateScheduleSettings({ dayMinutes, dates });
-      setDayMinutes(r.dayMinutes);
-      setDates(r.dates);
+      setDayMinutes(r.settings.dayMinutes);
+      setDates(r.settings.dates);
       setSavedAt(new Date().toLocaleTimeString());
-      const report = await api.schedule();
-      onSchedule(report);
+      setAuditNote(
+        r.audit
+          ? `已生成审计版本 #${r.audit.id}（变更 ${r.audit.changeCount} 项），详见「排程审计」页`
+          : r.auditSkippedReason
+            ? `未生成审计版本：${r.auditSkippedReason}`
+            : ''
+      );
+      onSchedule(r.schedule);
     });
 
   const addDate = () => {
@@ -112,6 +119,9 @@ export function SchedulePanel({ schedule, run, onSchedule }: Props) {
           </button>
           {savedAt && <span className="muted small">已重算于 {savedAt}</span>}
         </div>
+        {auditNote && (
+          <p className="muted small audit-inline-note">🧾 {auditNote}</p>
+        )}
         <p className="muted small">
           排程由服务端按固定规则确定性现算：满足「不可提前的故事序号」与锁定场次的前提下，
           优先合并同地点场景、最小化地点切换；锁定场次固定到指定拍摄日的第 N 个拍摄位置，
@@ -245,7 +255,7 @@ function DayCard({
                   <button
                     className="ghost"
                     onClick={() =>
-                      run(async () => onSchedule(await api.unlockScene(it.sceneId)))
+                      run(async () => onSchedule((await api.unlockScene(it.sceneId)).schedule))
                     }
                   >
                     🔓 解锁
@@ -328,7 +338,7 @@ function LockForm({
         className="primary"
         onClick={() =>
           run(async () => {
-            onSchedule(await api.lockScene(sceneId, date, ordinal));
+            onSchedule((await api.lockScene(sceneId, date, ordinal)).schedule);
             setOpen(false);
           })
         }

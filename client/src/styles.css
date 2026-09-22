@@ -831,3 +831,131 @@ tr.row-first td {
   gap: 6px;
   font-size: 13px;
 }
+
+/* ---------- 排程变更审计 ---------- */
+.audit-inline-note {
+  margin: 4px 0 0;
+}
+
+.audit-layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 980px) {
+  .audit-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.audit-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 72vh;
+  overflow-y: auto;
+}
+.audit-version {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.audit-version:hover {
+  border-color: var(--accent);
+}
+.audit-version-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.audit-version-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.audit-version-note {
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.audit-version-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+}
+.audit-version-actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.audit-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.audit-detail-head h3 {
+  margin: 0;
+}
+
+.audit-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.audit-change {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+}
+.audit-change-added {
+  border-color: rgba(63, 206, 139, 0.5);
+}
+.audit-change-removed {
+  border-color: rgba(255, 107, 107, 0.55);
+}
+.audit-change-date-moved,
+.audit-change-order-moved,
+.audit-change-lock-changed {
+  border-color: rgba(255, 184, 77, 0.45);
+}
+.audit-change-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.audit-change-move {
+  margin-top: 4px;
+}
+.audit-reasons {
+  margin: 6px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.audit-reasons li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.audit-reason-badge {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 8px;
+}
+
+.audit-unchanged {
+  margin-top: 12px;
+}

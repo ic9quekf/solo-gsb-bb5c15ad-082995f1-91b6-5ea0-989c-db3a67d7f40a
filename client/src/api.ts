@@ -176,6 +176,113 @@ export interface ScheduleSettings {
   dates: string[];
 }
 
+/* ------------------------------ 排程变更审计 ------------------------------ */
+
+export type AuditTrigger = 'init' | 'settings' | 'lock' | 'unlock' | 'manual' | 'compare';
+
+export type AuditChangeType =
+  | 'added'
+  | 'removed'
+  | 'date-moved'
+  | 'order-moved'
+  | 'lock-changed';
+
+export type AuditReasonCode =
+  | 'lock'
+  | 'capacity'
+  | 'story-prereq'
+  | 'new-scene'
+  | 'removed-scene'
+  | 'other';
+
+export interface AuditReason {
+  code: AuditReasonCode;
+  message: string;
+}
+
+export interface AuditChange {
+  id?: number;
+  sceneId: number;
+  sceneTitle: string;
+  storyIndex: number;
+  changeType: AuditChangeType;
+  reasons: AuditReason[];
+  fromDate: string;
+  toDate: string;
+  fromOrdinal: number | null;
+  toOrdinal: number | null;
+  fromLocked: boolean;
+  toLocked: boolean;
+}
+
+export interface AuditSummary {
+  added: number;
+  removed: number;
+  dateMoved: number;
+  orderMoved: number;
+  lockChanged: number;
+}
+
+export interface AuditDateStat {
+  dayIndex: number;
+  date: string;
+  beforeCount: number;
+  afterCount: number;
+}
+
+export interface AuditVersionMeta {
+  id: number;
+  trigger: AuditTrigger;
+  note: string;
+  baseVersionId: number | null;
+  isBaseline: boolean;
+  dayMinutes: number;
+  createdAt: string;
+}
+
+export interface AuditVersionSummary extends AuditVersionMeta {
+  dates: string[];
+  summary: AuditSummary;
+  changeCount: number;
+  totalScenes: number;
+}
+
+export interface AuditListResult {
+  baselineId: number | null;
+  latestId: number | null;
+  /** 当前工作区排程相对最新审计版本是否已漂移（有未归档的改动） */
+  drift: boolean;
+  versions: AuditVersionSummary[];
+}
+
+export interface AuditDetail {
+  baseVersion: AuditVersionMeta | null;
+  targetVersion: AuditVersionMeta | null;
+  compareMode: boolean;
+  summary: AuditSummary;
+  dateStats: AuditDateStat[];
+  totalScenesBefore: number;
+  totalScenesAfter: number;
+  changes: AuditChange[];
+  unchanged: {
+    sceneId: number;
+    sceneTitle: string;
+    storyIndex: number;
+    date: string;
+    ordinal: number;
+    locked: boolean;
+  }[];
+}
+
+/** 保存设置 / 锁定 / 解锁 / 手动归档的响应：最新排程 + 本次审计结果 */
+export interface ScheduleSaveResult {
+  schedule: ScheduleReport;
+  settings: ScheduleSettings;
+  /** 本次产生的审计版本；重复保存（输入相同或零变更）时为 null */
+  audit: AuditVersionSummary | null;
+  auditSkippedReason: string | null;
+}
+
 /* ------------------------------- 镜头清单 ------------------------------- */
 
 export type ShotStatus = 'pending' | 'done' | 'reshoot';
@@ -337,17 +444,29 @@ export const api = {
   schedule: () => req<ScheduleReport>('/api/schedule'),
   scheduleSettings: () => req<ScheduleSettings>('/api/schedule/settings'),
   updateScheduleSettings: (p: ScheduleSettings) =>
-    req<ScheduleSettings>('/api/schedule/settings', {
+    req<ScheduleSaveResult>('/api/schedule/settings', {
       method: 'PUT',
       body: JSON.stringify(p),
     }),
   lockScene: (id: number, date: string, ordinal: number) =>
-    req<ScheduleReport>(`/api/schedule/${id}/lock`, {
+    req<ScheduleSaveResult>(`/api/schedule/${id}/lock`, {
       method: 'PUT',
       body: JSON.stringify({ date, ordinal }),
     }),
   unlockScene: (id: number) =>
-    req<ScheduleReport>(`/api/schedule/${id}/lock`, { method: 'DELETE' }),
+    req<ScheduleSaveResult>(`/api/schedule/${id}/lock`, { method: 'DELETE' }),
+
+  auditList: () => req<AuditListResult>('/api/schedule-audit'),
+  auditDetail: (id: number) => req<AuditDetail>(`/api/schedule-audit/versions/${id}`),
+  auditCompare: (from: number, to: number) =>
+    req<AuditDetail>(`/api/schedule-audit/compare?from=${from}&to=${to}`),
+  auditSetBaseline: (id: number) =>
+    req<AuditVersionSummary>(`/api/schedule-audit/versions/${id}/baseline`, { method: 'PUT' }),
+  auditRecord: (note?: string) =>
+    req<ScheduleSaveResult>('/api/schedule-audit/versions', {
+      method: 'POST',
+      body: JSON.stringify({ note: note ?? '' }),
+    }),
 
   shotList: (sceneId?: number) =>
     req<ShotListReport>(`/api/shots${sceneId ? `?sceneId=${sceneId}` : ''}`),

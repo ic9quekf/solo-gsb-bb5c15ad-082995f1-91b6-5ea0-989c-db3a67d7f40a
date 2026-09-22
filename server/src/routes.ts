@@ -3,6 +3,14 @@ import { db, isValidDateISO } from './db.js';
 import { computeContinuity } from './engine.js';
 import { computeSchedule, computeStoryOrder, getScheduleSettings } from './schedule.js';
 import { PrereqValidationError, assertPrereqsValid, computeShotList } from './shots.js';
+import {
+  compareAuditVersions,
+  ensureInitialVersion,
+  getAuditDetail,
+  listAuditVersions,
+  recordScheduleAudit,
+  setBaseline,
+} from './audit.js';
 
 export const api = Router();
 
@@ -485,7 +493,7 @@ api.get(
   })
 );
 
-/** 更新排程设置（整体替换拍摄日期；随后重算排程） */
+/** 更新排程设置（整体替换拍摄日期；随后重算排程并写入审计版本） */
 api.put(
   '/schedule/settings',
   h((req, res) => {
@@ -507,6 +515,7 @@ api.put(
     });
     dates.sort(); // 日期按自然顺序排列，保证确定性
 
+    const prev = getScheduleSettings();
     db.transaction(() => {
       db.prepare('UPDATE schedule_settings SET day_minutes = ? WHERE id = 1').run(dayMinutes);
       db.prepare('DELETE FROM schedule_dates').run();
@@ -514,11 +523,26 @@ api.put(
       dates.forEach((d, i) => ins.run(d, i + 1));
     })();
 
-    res.json(getScheduleSettings());
+    // 审计：与基线（未标记时为上一版）逐项比对；输入相同/零变更不产生空版本
+    const minutesChanged = prev.dayMinutes !== dayMinutes;
+    const prevSet = new Set(prev.dates);
+    const newSet = new Set(dates);
+    const added = dates.filter((d) => !prevSet.has(d));
+    const removed = prev.dates.filter((d) => !newSet.has(d));
+    const parts: string[] = [];
+    if (minutesChanged) parts.push(`单日容量 ${prev.dayMinutes} → ${dayMinutes} 分钟`);
+    if (added.length) parts.push(`新增拍摄日 ${added.join('、')}`);
+    if (removed.length) parts.push(`移除拍摄日 ${removed.join('、')}`);
+    const note =
+      parts.length > 0
+        ? `保存排程设置并重算：${parts.join('；')}。`
+        : '保存排程设置并重算（设置未变，仅触发重新计算）。';
+
+    res.json(recordScheduleAudit({ trigger: 'settings', note }).result);
   })
 );
 
-/** 锁定场次到某拍摄日的第 ordinal 个位置（随后重算排程） */
+/** 锁定场次到某拍摄日的第 ordinal 个位置（随后重算排程并写入审计版本） */
 api.put(
   '/schedule/:id/lock',
   h((req, res) => {
@@ -542,22 +566,109 @@ api.put(
       throw new HttpError(409, `${date} 第 ${ordinal} 位已被另一场次锁定，请先解锁该位置或换一个位置`);
     }
 
+    const prevLock = db
+      .prepare('SELECT date, ordinal FROM schedule_locks WHERE scene_id = ?')
+      .get(sceneId) as { date: string; ordinal: number } | undefined;
+    const scene = db.prepare('SELECT title FROM scenes WHERE id = ?').get(sceneId) as { title: string };
+
     db.prepare(
       `INSERT INTO schedule_locks (scene_id, date, ordinal) VALUES (?, ?, ?)
        ON CONFLICT(scene_id) DO UPDATE SET date = excluded.date, ordinal = excluded.ordinal, locked_at = datetime('now')`
     ).run(sceneId, date, ordinal);
 
-    res.json(computeSchedule());
+    const note = prevLock
+      ? `调整锁定：「${scene.title}」由 ${prevLock.date} 第 ${prevLock.ordinal} 位改为 ${date} 第 ${ordinal} 位并重算。`
+      : `锁定场次：「${scene.title}」锁定到 ${date} 第 ${ordinal} 位并重算。`;
+    res.json(recordScheduleAudit({ trigger: 'lock', note }).result);
   })
 );
 
-/** 解锁场次（随后重算排程） */
+/** 解锁场次（随后重算排程并写入审计版本） */
 api.delete(
   '/schedule/:id/lock',
   h((req, res) => {
     const sceneId = idParam(req);
+    const prevLock = db
+      .prepare('SELECT date, ordinal FROM schedule_locks WHERE scene_id = ?')
+      .get(sceneId) as { date: string; ordinal: number } | undefined;
+    const scene = db.prepare('SELECT title FROM scenes WHERE id = ?').get(sceneId) as
+      | { title: string }
+      | undefined;
     db.prepare('DELETE FROM schedule_locks WHERE scene_id = ?').run(sceneId);
-    res.json(computeSchedule());
+    const note =
+      prevLock && scene
+        ? `解锁场次：「${scene.title}」（原锁定于 ${prevLock.date} 第 ${prevLock.ordinal} 位）并重算。`
+        : '解锁场次并重算。';
+    res.json(recordScheduleAudit({ trigger: 'unlock', note }).result);
+  })
+);
+
+/* ------------------------------ 排程变更审计 ------------------------------ */
+
+/** 审计版本列表（含基线/最新版本标记与当前排程是否已漂移） */
+api.get(
+  '/schedule-audit',
+  h((_req, res) => {
+    res.json(listAuditVersions());
+  })
+);
+
+/** 手动把当前排程归档为一个审计版本（用于场景增删/地点/时长/故事前置等编辑后补记） */
+api.post(
+  '/schedule-audit/versions',
+  h((_req, res) => {
+    const note = str(_req.body?.note).slice(0, 300) || '手动归档：将当前排程结果记录为审计版本。';
+    const outcome = recordScheduleAudit({ trigger: 'manual', note });
+    if (!outcome.versionId) {
+      throw new HttpError(409, outcome.result.auditSkippedReason ?? '当前排程与基准版本一致，未产生新版本');
+    }
+    res.status(201).json(outcome.result);
+  })
+);
+
+/** 查看某版本的变更摘要与场次详情（相对其保存时的基准版本） */
+api.get(
+  '/schedule-audit/versions/:id',
+  h((req, res) => {
+    const id = idParam(req);
+    const detail = getAuditDetail(id);
+    if (!detail) throw new HttpError(404, '审计版本不存在');
+    res.json(detail);
+  })
+);
+
+/** 将任一版本标记为基线；之后保存产生的新版本均继续与该基线比较 */
+api.put(
+  '/schedule-audit/versions/:id/baseline',
+  h((req, res) => {
+    const id = idParam(req);
+    try {
+      res.json(setBaseline(id));
+    } catch {
+      throw new HttpError(404, '审计版本不存在');
+    }
+  })
+);
+
+/** 任意两版即时比较：?from=<版本id>&to=<版本id>（不落库） */
+api.get(
+  '/schedule-audit/compare',
+  h((req, res) => {
+    const from = num(req.query.from, 0);
+    const to = num(req.query.to, 0);
+    if (from <= 0 || to <= 0) throw new HttpError(400, '需要提供 from 与 to 两个版本 id');
+    if (from === to) throw new HttpError(400, 'from 与 to 不能相同');
+    const detail = compareAuditVersions(from, to);
+    if (!detail) throw new HttpError(404, '审计版本不存在');
+    res.json(detail);
+  })
+);
+
+/** 服务启动/首次使用时建立初始审计版本（幂等，一般由 index.ts 调用，亦可手工触发） */
+api.post(
+  '/schedule-audit/init',
+  h((_req, res) => {
+    res.status(201).json({ version: ensureInitialVersion() });
   })
 );
 
